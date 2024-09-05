@@ -166,7 +166,7 @@ class Airtable(object):
             for field in table["fields"]:
                 # numbers are not allowed at the start of column name in big query
                 # check if the name starts with digit, keep the same naming but add a character before
-                field_name = field["name"]
+                field_name = field["name"].replace('(','').replace(')','')
                 if field["name"][0].isdigit():
                     field_name = "c_" + field_name
 
@@ -253,9 +253,13 @@ class Airtable(object):
                 continue
 
             if "selected" in m["metadata"] and m["metadata"]["selected"]:
-                column_name = m["breadcrumb"][1]
+                original_name = m["breadcrumb"][1]
+                sanitized_name = original_name.replace('(', '').replace(')', '').replace(' ', '_')
+                if original_name[0].isdigit():  # prepend 'c_' if the name starts with a digit
+                    sanitized_name = 'c_' + sanitized_name
+
                 ids = m["metadata"].get("airtable_field_ids", [])
-                selected_cols[column_name] = schema["schema"]["properties"][column_name]
+                selected_cols[sanitized_name] = schema["schema"]["properties"][original_name]
                 field_ids.extend(ids)
         return selected_cols, field_ids
 
@@ -263,7 +267,8 @@ class Airtable(object):
     def _find_column(cls, col, meta_data):
         for m in meta_data:
             if "breadcrumb" in m and "properties" in m["breadcrumb"] and m["breadcrumb"][1] == col:
-                return m["metadata"].get("real_name")
+                if m["metadata"].get("real_name"):
+                    return m["metadata"].get("real_name").replace('(', '').replace(')', '')
 
     @classmethod
     def run_sync(cls, config, properties):
@@ -312,14 +317,14 @@ class Airtable(object):
                 col_def = schema[col]
                 requested_type = col_def["type"][1] or "string"
 
-                col_name = cls._find_column(col, meta_data) or col
-                val = r["fields"].get(col_name)
+                # Use sanitized column names for internal processing
+                sanitized_col = col.replace('(', '').replace(')', '').replace(' ', '_')
+                val = r["fields"].get(sanitized_col)
                 if val is not None:
                     val = cls.cast_type(val, requested_type)
-                row[col] = val
+                row[sanitized_col] = val
 
             row["id"] = r["id"]
-            # TODO: cast to string/numbers?
             mapped.append(row)
         return mapped
 
