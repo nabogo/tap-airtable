@@ -2,6 +2,7 @@ import json
 import urllib.parse
 from copy import deepcopy
 import base64
+import re
 
 import singer
 from requests import Session
@@ -10,6 +11,13 @@ from singer import metadata
 from singer.catalog import Catalog, CatalogEntry, Schema
 from slugify import slugify
 
+
+
+def standardize_name(original_name):
+    return '_' + '_'.join(
+    re.sub('([A-Z][a-z]+)', r' \1',
+    re.sub('([A-Z]+)', r' \1',
+    original_name.replace('-', ' '))).split()).lower()
 
 def write_secrets(config: dict) -> None:
     import sys
@@ -167,8 +175,11 @@ class Airtable(object):
                 # numbers are not allowed at the start of column name in big query
                 # check if the name starts with digit, keep the same naming but add a character before
                 field_name = field["name"].replace('(','').replace(')','')
+
                 if field["name"][0].isdigit():
                     field_name = "c_" + field_name
+
+                field_name = standardize_name(field_name)
 
                 col_schema = cls.column_schema(field)
                 if col_schema.inclusion == "automatic":
@@ -254,9 +265,11 @@ class Airtable(object):
 
             if "selected" in m["metadata"] and m["metadata"]["selected"]:
                 original_name = m["breadcrumb"][1]
-                sanitized_name = original_name.replace('(', '').replace(')', '').replace(' ', '_')
+                sanitized_name = original_name.replace('(', '').replace(')', '')
                 if original_name[0].isdigit():  # prepend 'c_' if the name starts with a digit
                     sanitized_name = 'c_' + sanitized_name
+
+                sanitized_name = standardize_name(sanitized_name)
 
                 ids = m["metadata"].get("airtable_field_ids", [])
                 selected_cols[sanitized_name] = schema["schema"]["properties"][original_name]
@@ -306,6 +319,8 @@ class Airtable(object):
                             singer.write_records(table_slug, cls._map_records(stream, records))
                             offset = response.json().get("offset")
 
+
+   # working but with full column name 
     @classmethod
     def _map_records(cls, stream, records):
         mapped = []
@@ -314,17 +329,26 @@ class Airtable(object):
         for r in records:
             row = {}
             for col in schema:
-                col_def = schema[col]
-                requested_type = col_def["type"][1] or "string"
+                # Access metadata safely and get 'real_name' if available
+                col_metadata = next((m["metadata"] for m in meta_data if len(m["breadcrumb"]) > 1 and m["breadcrumb"][1] == col), None)
+                airtable_field_name = col_metadata['real_name'] if col_metadata and 'real_name' in col_metadata else col
 
-                # Use sanitized column names for internal processing
-                sanitized_col = col.replace('(', '').replace(')', '').replace(' ', '_')
-                val = r["fields"].get(sanitized_col)
+                # Retrieve the value from the record
+                val = r["fields"].get(airtable_field_name, None)
+
+                if isinstance(val, str):
+                    val = val.replace('[', '').replace(']', '').replace('\"', '')
+
+                # Cast the value if it's not None
                 if val is not None:
-                    val = cls.cast_type(val, requested_type)
-                row[sanitized_col] = val
+                    val = cls.cast_type(val, schema[col]["type"][1] if len(schema[col]["type"]) > 1 else "string")
 
-            row["id"] = r["id"]
+                # Apply standardized naming to column name
+                colName = standardize_name(col)
+                row[colName] = val
+
+            # Ensure the primary key 'id' is handled correctly
+            row["_id"] = r["id"]
             mapped.append(row)
         return mapped
 
