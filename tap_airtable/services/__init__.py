@@ -14,7 +14,7 @@ from slugify import slugify
 
 
 def standardize_name(original_name):
-    return '_'.join(
+    return "_" + '_'.join(
     re.sub('([A-Z][a-z]+)', r' \1',
     re.sub('([A-Z]+)', r' \1',
     original_name.replace('-', ' '))).split()).lower()
